@@ -1,3 +1,7 @@
+"""Расчёт стоимости заявки по прайсу одного поставщика.
+
+Строки двух файлов связывает артикул. Товары могут идти в разном порядке.
+"""
 import argparse
 import csv
 import re
@@ -6,7 +10,9 @@ from pathlib import Path
 
 
 def read_items(path, field, parse):
+    """Читает пары «артикул — значение». Для заявки разбираем количество, для прайса — цену."""
     items = {}
+    # Excel может добавить в начало UTF-8 файла служебную метку. utf-8-sig убирает её из заголовка.
     with path.open(encoding="utf-8-sig", newline="") as source:
         reader = csv.reader(source, delimiter=";", strict=True)
         headers = next(reader, [])
@@ -18,6 +24,7 @@ def read_items(path, field, parse):
             location = f"{path}, строка {reader.line_num}"
             if len(row) != len(headers):
                 raise ValueError(f"{location}: проверьте число полей")
+            # Начальные нули важны: у поставщика «001» и «1» могут означать разные товары.
             sku = row[headers.index("артикул")].strip()
             if not sku or sku in items:
                 raise ValueError(f"{location}: пустой или повторяющийся артикул «{sku}»")
@@ -30,27 +37,31 @@ def read_items(path, field, parse):
     return items
 
 
-def quantity(value):
+def quantity(value: str) -> int:
+    """Количество в заявке измеряется в целых штуках."""
     if not re.fullmatch(r"[0-9]+", value) or int(value) < 1:
         raise ValueError("количество должно быть целым положительным числом")
     return int(value)
 
 
-def price(value):
+def price(value: str) -> Decimal:
+    """Принимает цену с точкой или запятой. Decimal сохраняет копейки при расчёте."""
     if not re.fullmatch(r"[0-9]+([.,][0-9]{1,2})?", value):
         raise ValueError("нужна неотрицательная цена с точностью до копеек")
     return Decimal(value.replace(",", "."))
 
 
-def rubles(value):
+def rubles(value: Decimal) -> str:
     return f"{value:.2f}".replace(".", ",") + " ₽"
 
 
-def report(request, prices):
+def report(request: dict[str, int], prices: dict[str, Decimal]) -> str:
+    """Считает стоимость строк в порядке заявки и подписывает итог, если каких-то цен нет."""
     lines = []
     total = Decimal(0)
     missing = 0
     for sku, count in request.items():
+        # Проверяем наличие артикула: нулевая цена в прайсе тоже действительна.
         if sku not in prices:
             missing += 1
             lines.append(f"{sku}: {count} шт. — нет в прайсе")
