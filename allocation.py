@@ -29,6 +29,38 @@ class Order:
         return self.units * self.offer.price
 
 
+@dataclass
+class QuoteLine:
+    sku: str
+    demand: int
+    listed: bool
+    orders: list[Order]
+
+    @property
+    def units(self):
+        return sum(order.units for order in self.orders)
+
+    @property
+    def shortage(self):
+        return max(0, self.demand - self.units)
+
+    @property
+    def surplus(self):
+        return max(0, self.units - self.demand)
+
+    @property
+    def amount(self):
+        return sum((order.amount for order in self.orders), Decimal(0))
+
+
+def build_quote(request, catalogs):
+    lines = []
+    for sku, demand in request.items():
+        offers = [catalog[sku] for catalog in catalogs if sku in catalog]
+        lines.append(QuoteLine(sku, demand, bool(offers), allocate(demand, offers)))
+    return lines
+
+
 def allocate(demand: int, offers: list[Offer]) -> list[Order]:
     available = [(offer, offer.available_packs(demand)) for offer in offers]
     available = [(offer, count) for offer, count in available if count]

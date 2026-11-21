@@ -11,7 +11,7 @@ from pathlib import Path
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile
 
-from allocation import Offer, allocate
+from allocation import Offer, build_quote
 
 
 def input_rows(path):
@@ -127,21 +127,17 @@ def report(request: dict[str, int], prices: dict[str, Decimal]) -> str:
     return "\n".join(lines)
 
 
-def supplier_report(request, catalogs):
+def supplier_report(quote):
     lines = []
     total = Decimal(0)
     incomplete = 0
-    for sku, demand in request.items():
-        offers = [catalog[sku] for catalog in catalogs if sku in catalog]
-        orders = allocate(demand, offers)
-        units = sum(order.units for order in orders)
-        shortage = max(0, demand - units)
-        incomplete += bool(shortage)
-        lines.append(f"{sku}: заявка {demand}, заказать {units}, "
-                     f"излишек {max(0, units - demand)}, дефицит {shortage} шт.")
-        if not offers:
+    for item in quote:
+        incomplete += bool(item.shortage)
+        lines.append(f"{item.sku}: заявка {item.demand}, заказать {item.units}, "
+                     f"излишек {item.surplus}, дефицит {item.shortage} шт.")
+        if not item.listed:
             lines.append("  Нет в прайсах")
-        for order in orders:
+        for order in item.orders:
             lines.append(f"  {order.offer.supplier}: {order.packs} уп. × {order.offer.pack} шт., "
                          f"{rubles(order.offer.price)}/шт. — {rubles(order.amount)}")
             total += order.amount
@@ -153,6 +149,7 @@ def main():
     parser = argparse.ArgumentParser(description="Расчёт заявки по прайсам поставщиков")
     parser.add_argument("request", type=Path, help="Заявка (.csv или .xlsx)")
     parser.add_argument("prices", type=Path, nargs="+", help="Прайсы поставщиков (.csv или .xlsx)")
+    parser.add_argument("-o", "--output", type=Path, help="Сохранить отчёт в .xlsx")
     args = parser.parse_args()
     try:
         request = read_items(args.request, "количество", quantity)
@@ -160,12 +157,25 @@ def main():
         if len(set(names)) != len(names):
             raise ValueError("дайте прайсам разных поставщиков разные имена файлов")
         catalogs = [read_offers(path) for path in args.prices]
+        quote = build_quote(request, catalogs)
+        if args.output:
+            if args.output.suffix.lower() != ".xlsx":
+                raise ValueError("для отчёта укажите файл с расширением .xlsx")
+            if args.output.resolve() in {p.resolve() for p in [args.request, *args.prices]}:
+                raise ValueError("путь отчёта совпадает с входным файлом")
+            try:
+                from excel_report import save_report
+            except ModuleNotFoundError as error:
+                raise ValueError("для Excel установите зависимости: python -m pip install -r requirements.txt") from error
+            save_report(args.output, quote)
     except (ValueError, OSError, csv.Error) as error:
         parser.exit(2, f"Ошибка: {error}\n")
     if len(catalogs) == 1 and all(o.pack == 1 and o.stock is None for o in catalogs[0].values()):
         print(report(request, {sku: offer.price for sku, offer in catalogs[0].items()}))
     else:
-        print(supplier_report(request, catalogs))
+        print(supplier_report(quote))
+    if args.output:
+        print(f"Отчёт сохранён: {args.output}")
 
 
 if __name__ == "__main__":
